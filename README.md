@@ -2,7 +2,7 @@
   <img src="docs/logo.png" width="180" alt="MCP Proxy Studio Logo">
 </p>
 
-<h1 align="center">MCP Proxy Dashboard</h1>
+<h1 align="center">MCP Proxy Studio</h1>
 
 <p align="center">
   <strong>A visual dashboard to create, run and monitor MCP proxies — stdio, SSE, streamable HTTP & OpenAPI.</strong><br>
@@ -46,7 +46,7 @@
 ### One-liner to start (npx)
 ```bash
 npx -y github:lucasiscovici/MCP-Proxy-Studio start
-````
+```
 
 ### One-liner to stop (npx)
 ```bash
@@ -179,6 +179,21 @@ For OpenAPI sources:
 * **Frontend:** Vanilla JS with modals + SSE updates
 * Auto-start guarded by container boot ID
 
+---
+
+## 🧑‍💻 Development
+
+```bash
+make dev
+```
+
+---
+
+## 🚢 Production (versioned image)
+
+```bash
+make prod
+```
 ---
 
 ## ❗ Troubleshooting
