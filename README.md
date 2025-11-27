@@ -1,71 +1,189 @@
-# MCP Proxy Dashboard
+<p align="center">
+  <img src="docs/logo.png" width="180" alt="MCP Proxy Studio Logo">
+</p>
 
-A web UI to create, run, and observe MCP proxies. It wraps the Go `mcp-proxy` CLI, the `mcpo` OpenAPI bridge, and MCP Inspector so you can mix stdio, SSE, streamable HTTP, and OpenAPI targets with live logs and auto-start.
+<h1 align="center">MCP Proxy Dashboard</h1>
 
-## Highlights
-- Visual dashboard: create, edit, start/stop, delete flows
-- Transports: `stdio`, `sse`, `streamable_http`, `openapi` (via `mcpo`)
-- Per-flow Inspector launch; global Inspector start/stop
-- Auto-start for flows and Inspector with toasts + disabled controls during boot
-- Live event feed (SSE) with optional persistence across reloads
-- OpenAPI bridge: auto-spawns `@ivotoby/openapi-mcp-server` helpers for OpenAPI sources
+<p align="center">
+  <strong>A visual dashboard to create, run and monitor MCP proxies — stdio, SSE, streamable HTTP & OpenAPI.</strong><br>
+  Zero CLI friction. Live logs. Integrated Inspector. Auto-start flows.
+</p>
 
-## Ports
-- Dashboard UI: `8000`
-- Streamable HTTP exposure: `8001`
-- SSE exposure: `8002`
-- OpenAPI exposure (mcpo): `8003` at `/openapi/<route>`
-- MCP Inspector UI: `6274` (server side `6277`)
+<p align="center">
+  <img src="https://img.shields.io/github/license/lucasiscovici/MCP-Proxy-Studio" />
+  <img src="https://img.shields.io/github/stars/lucasiscovici/MCP-Proxy-Studio" />
+  <img src="https://img.shields.io/github/v/release/lucasiscovici/MCP-Proxy-Studio" />
+</p>
 
-## Quick start (one-liner)
+---
+
+## 🎥 Demo (Screenshots)
+
+- **Dashboard overview**  
+  ![dashboard](docs/screenshot-dashboard.png)
+
+- **Flow editor**  
+  ![flow-editor](docs/screenshot-flow-editor.png)
+
+- **Live events & Inspector integration**
+  ![inspector](docs/live-events.png)
+  ![inspector](docs/screenshot-inspector.png)
+
+---
+
+## 🚀 Features
+
+- **Visual Flow Builder** – Manage your stdio, SSE, streamable HTTP & OpenAPI flows.
+- **Integrated MCP Inspector** – Per-flow or global launch, auto-configured.
+- **Live event feed** – Real-time logs with optional persistence.
+- **OpenAPI Bridge** – Auto-spawns `@ivotoby/openapi-mcp-server` when required.
+- **Auto-start system** – Flows & Inspector can boot automatically with safe state handling.
+- **Clean UI, no framework** – All vanilla JS with SSE realtime feedback.
+
+---
+
+## 📦 Quick Start
+
+### One-liner (npx)
 ```bash
 npx --yes github:lucasiscovici/MCP-Proxy-Studio start
+# Optional:
 # npx --yes github:lucasiscovici/MCP-Proxy-Studio stop
 # npx --yes github:lucasiscovici/MCP-Proxy-Studio status
-```
+# npx --yes github:lucasiscovici/MCP-Proxy-Studio update
+````
 
-## Quick start (docker-compose)
+### Docker Compose
+
 ```bash
 cd web-ui-mcp-proxy
 docker-compose up --build
 ```
-Open `http://localhost:8002`. Data persists in `./data`.
 
-## Flow model
-- Sources: `stdio` (command/args/env), `sse` (url/headers), `streamable_http` (url/headers), `openapi` (base/spec; spawns helper).
-- Targets: `sse`, `streamable_http`, or `openapi` (no stdio target). OpenAPI source is forced to `streamable_http`.
-- Endpoints:
-  - SSE target → `http://<host>:8001/<route>/sse`
-  - Streamable target → `http://<host>:8001/<route>/mcp`
-  - OpenAPI target → `http://<host>:8003/<route>`
+Open: **[http://localhost:8000](http://localhost:8000)**
+Your config is stored in `mcp-dashboard-data` volume.
 
-## Using the UI
-1. **Create** a flow (command for stdio, URL for SSE/streamable HTTP, base/spec for OpenAPI).  
-2. **Start/Stop** per flow, or **Start all / Stop all** (auto-start freeze disables buttons briefly).  
-3. **Inspector**: top buttons start/stop; per-flow Inspector opens with the right params (`/docs` for OpenAPI).  
-4. **Events**: live feed; enable **Persist events** in Settings to keep history on reload.  
-5. **Settings**: toggles for auto-start flows/Inspector, event persistence.
+---
 
-## OpenAPI specifics
-- For an OpenAPI source, the dashboard runs `npx -y @ivotoby/openapi-mcp-server` on a free port, waits for readiness, then points the proxy to it.
-- OpenAPI targets are served by `mcpo` on port `8003` at `/<route>`; Inspector opens `/docs` for those flows.
+## 🔧 Ports
 
-## Environment knobs
-- `MCP_PROXY_BIN` (default `mcp-proxy`)
-- `MCP_OPENAPI_BIN` (default `uvx mcpo`)
-- `MCP_INSPECTOR_BIN` (default `npx -y @modelcontextprotocol/inspector`)
-- `MCP_INSPECTOR_PORT` / `MCP_INSPECTOR_SERVER_PORT`, `MCP_INSPECTOR_HOST`, `MCP_INSPECTOR_PUBLIC_HOST`
-- `MCP_DASH_DATA` to relocate `data/flows.json`
+| Component             | Port                          |
+| --------------------- | ----------------------------- |
+| Dashboard UI          | **8000**                      |
+| Streamable HTTP       | **8001**                      |
+| SSE events            | **8002**                      |
+| OpenAPI target (mcpo) | **8003** (`/<route>`) |
+| MCP Inspector UI      | **6274** (server: 6277)       |
 
-## Dev notes
-- Backend: FastAPI orchestrates processes/configs; persists flows in `data/flows.json`, runtime configs in `data/runtime/`.
-- Frontend: vanilla JS with modals, toasts, and SSE updates.
-- Auto-start is keyed by container boot ID to avoid re-running on simple reloads.
+---
 
-## Troubleshooting
-- OpenAPI 404: ensure upstream MCP is reachable; the helper waits but the target must exist.
-- Stdio commands: ensure `npx`, `uvx`, or `docker` are available in PATH inside the container.
-- Inspector unreachable: check ports `6274/6277` and `inspector_public_host`.
+## 🧩 Flow Model
+
+### Sources
+
+* **stdio** – command/args/env
+* **sse** – URL + headers
+* **streamable_http** – URL + headers
+* **openapi** – base URL + spec → spawns automatic helper
+
+### Targets
+
+* `sse`
+* `streamable_http`
+* `openapi`
+
+> OpenAPI sources always target `streamable_http`.
+
+### Resulting Endpoints
+
+* SSE target → `http://<host>:8001/<route>/sse`
+* Streamable target → `http://<host>:8001/<route>/mcp`
+* OpenAPI target → `http://<host>:8003/<route>`
+
+---
+
+## 🖥 Using the UI
+
+1. **Create** a flow
+2. **Start/Stop** (per-flow or global)
+3. **Inspect** – Opens MCP Inspector already configured
+4. **Monitor** – Live event stream with optional persistence
+5. **Configure** – Auto-start behaviors and settings
+
+---
+
+## 📚 OpenAPI Management
+
+For OpenAPI sources:
+
+* Runs automatically:
+  `npx -y @ivotoby/openapi-mcp-server`
+* Waits for readiness
+* Exposes targets via `mcpo` at **port 8003**
+* Inspector opens automatically on `/docs`
+
+---
+
+## 🔌 Built On (Key Dependencies)
+
+### Core MCP tooling
+
+* **mcp-proxy** (Go)
+* **mcpo**
+* **@ivotoby/openapi-mcp-server**
+* **@modelcontextprotocol/inspector**
+
+### Backend
+
+* **FastAPI**, **Uvicorn**, **Pydantic**
+* **asyncio**, **subprocess** orchestration
+
+### Frontend
+
+* **Vanilla JavaScript**
+* **EventSource (SSE)**
+* **Fetch API**
+
+### Dev / Runtime
+
+* **Docker / docker-compose**
+* **npx**, **uvx**
+
+---
+
+## ⚙️ Environment Variables
+
+| Variable                                           | Description                                       |
+| -------------------------------------------------- | ------------------------------------------------- |
+| `MCP_PROXY_BIN`                                    | default: `mcp-proxy`                              |
+| `MCP_OPENAPI_BIN`                                  | default: `uvx mcpo`                               |
+| `MCP_INSPECTOR_BIN`                                | default: `npx -y @modelcontextprotocol/inspector` |
+| `MCP_INSPECTOR_PORT` / `MCP_INSPECTOR_SERVER_PORT` | Inspector ports                                   |
+
+---
+
+## 🛠 Dev Notes
+
+* **Backend:** FastAPI orchestrates child processes and persists configs in `mcp-dashboard-data` volume
+* **Frontend:** Vanilla JS with modals + SSE updates
+* Auto-start guarded by container boot ID
+
+---
+
+## ❗ Troubleshooting
+
+* **OpenAPI → 404**: check upstream MCP
+* **Stdio issues**: ensure `npx`, `uvx`, or `docker` exist in PATH
+* **Inspector unreachable**: check ports `6274/6277`
+
+---
+
+## ⭐ Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=lucasiscovici/MCP-Proxy-Studio\&type=Date)](https://star-history.com/#lucasiscovici/MCP-Proxy-Studio&Date)
+
+---
 
 ## License
+
 MIT
