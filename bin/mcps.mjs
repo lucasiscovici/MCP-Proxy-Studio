@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const REPO = "lucasiscovici/MCP-Proxy-Studio";
 const REF = process.env.REF || "main"; 
@@ -39,6 +40,31 @@ const COMPOSE_NAMES = new Set([
   "compose.yaml", "compose.yml",
   "docker-compose.yaml", "docker-compose.yml"
 ]);
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function downloadCompose(destFile, ref) {
+  const url = `https://raw.githubusercontent.com/${REPO}/${ref}/docker-compose.yml`;
+  run("bash", ["-lc", `curl -fsSL "${url}" -o "${destFile}"`]);
+  return fs.existsSync(destFile) ? destFile : null;
+}
+
+function findComposeLocal() {
+  const envPath = process.env.DOCKER_COMPOSE_PATH;
+  const candidates = [
+    envPath,
+    path.join(process.cwd(), "docker-compose.yml"),
+    path.join(process.cwd(), "docker-compose.yaml"),
+    path.join(__dirname, "..", "docker-compose.yml"),
+    path.join(__dirname, "..", "docker-compose.yaml"),
+    path.join(__dirname, "..", "..", "docker-compose.yml"),
+    path.join(__dirname, "..", "..", "docker-compose.yaml"),
+  ].filter(Boolean);
+  for (const c of candidates) {
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
 
 function findCompose(dir, maxDepth = 5) {
   const queue = [{ d: dir, depth: 0 }];
@@ -101,28 +127,37 @@ if (!cmd || !["start", "status", "stop", "update"].includes(cmd)) {
   process.exit(cmd ? 1 : 0);
 }
 
-const tmpDir = path.join(TMP_BASE, `${sha1(`${REPO}@${REF}`)}`);
+let composePath = findComposeLocal();
+let projectDir = composePath ? path.dirname(composePath) : null;
 
-if (refresh || !fs.existsSync(path.join(tmpDir, ".gitignore")) && !fs.existsSync(STATE)) {
-  rmrf(tmpDir);
-  downloadRepo(tmpDir, REF);
-  fs.mkdirSync(path.join(tmpDir, "data"), { recursive: true });
-
-  fs.writeFileSync(STATE, JSON.stringify({ repo: REPO, ref: REF, tmpDir }, null, 2), "utf8");
-} else if (!fs.existsSync(tmpDir)) {
-  downloadRepo(tmpDir, REF);
-  fs.mkdirSync(path.join(tmpDir, "data"), { recursive: true });
-  fs.writeFileSync(STATE, JSON.stringify({ repo: REPO, ref: REF, tmpDir }, null, 2), "utf8");
+if (!composePath || refresh) {
+  const dlDir = path.join(TMP_BASE, `${sha1(`${REPO}@${REF}`)}`);
+  fs.mkdirSync(dlDir, { recursive: true });
+  const dlFile = path.join(dlDir, "docker-compose.yml");
+  try {
+    const got = downloadCompose(dlFile, REF);
+    if (got) {
+      composePath = got;
+      projectDir = path.dirname(composePath);
+    }
+  } catch (err) {
+    // fallback to full repo download
+  }
+  if (!composePath) {
+    // legacy fallback: download repo and search compose
+    rmrf(dlDir);
+    downloadRepo(dlDir, REF);
+    fs.mkdirSync(path.join(dlDir, "data"), { recursive: true });
+    composePath = findCompose(dlDir);
+    projectDir = composePath ? path.dirname(composePath) : dlDir;
+  }
 }
 
-const composePath = findCompose(tmpDir);
-if (!composePath) {
-  console.error(`Aucun fichier compose trouvé dans le repo cloné: ${tmpDir}`);
-  console.error(`Cherchés: ${Array.from(COMPOSE_NAMES).join(", ")}`);
+if (!composePath || !projectDir) {
+  console.error(`Aucun fichier compose trouvé (essayé env/cwd/packagé et téléchargement REF=${REF})`);
   process.exit(1);
 }
 
-const projectDir = path.dirname(composePath);
 fs.mkdirSync(path.join(projectDir, "data"), { recursive: true });
 
 const base = [
