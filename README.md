@@ -53,6 +53,11 @@ npx -y github:lucasiscovici/MCP-Proxy-Studio start
 uvx --from git+https://github.com/lucasiscovici/MCP-Proxy-Studio@main mcps start
 ```
 
+### One-liner to start (docker-compose)
+```bash
+curl -fsSL https://raw.githubusercontent.com/lucasiscovici/MCP-Proxy-Studio/main/docker-compose.yml | docker compose up -d
+```
+
 ### One-liner to stop (npx)
 ```bash
 npx -y github:lucasiscovici/MCP-Proxy-Studio stop
@@ -61,6 +66,11 @@ npx -y github:lucasiscovici/MCP-Proxy-Studio stop
 ### One-liner to stop (uvx)
 ```bash
 uvx --from git+https://github.com/lucasiscovici/MCP-Proxy-Studio@main mcps stop
+```
+
+### One-liner to stop (docker-compose)
+```bash
+curl -fsSL https://raw.githubusercontent.com/lucasiscovici/MCP-Proxy-Studio/main/docker-compose.yml | docker compose down
 ```
 
 ### Others (npx)
@@ -85,10 +95,11 @@ uvx --from git+https://github.com/lucasiscovici/MCP-Proxy-Studio@main mcps start
 uvx --from git+https://github.com/lucasiscovici/MCP-Proxy-Studio@main mcps update -- force
 ```
 
-### Docker Compose
-
+### Others (docker-compose)
 ```bash
-git clone https://github.com/lucasiscovici/MCP-Proxy-Studio.git && cd MCP-Proxy-Studio && docker-compose up -d --build
+# Optional:
+# curl -fsSL https://raw.githubusercontent.com/lucasiscovici/MCP-Proxy-Studio/main/docker-compose.yml | docker compose ps
+# curl -fsSL https://raw.githubusercontent.com/lucasiscovici/MCP-Proxy-Studio/main/docker-compose.yml | docker compose up -d --build
 ```
 
 Open: **[http://localhost:8000](http://localhost:8000)**
@@ -202,6 +213,12 @@ For OpenAPI sources:
 ---
 
 ## 🧑‍💻 Development
+
+### Docker Compose Prod
+
+```bash
+git clone https://github.com/lucasiscovici/MCP-Proxy-Studio.git && cd MCP-Proxy-Studio
+```
 
 ```bash
 make dev
