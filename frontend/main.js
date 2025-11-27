@@ -53,6 +53,9 @@ const el = {
   clearFeed: document.getElementById("clear-feed"),
   toggleInspector: document.getElementById("toggle-inspector"),
   openInspector: document.getElementById("open-inspector"),
+  exportFlows: document.getElementById("export-flows"),
+  importFlows: document.getElementById("import-flows"),
+  importFile: document.getElementById("import-file"),
   toast: document.getElementById("toast"),
   stats: {
     running: document.getElementById("stat-running"),
@@ -672,6 +675,43 @@ async function startAllFlows(silent = false, onlyAuto = false) {
   await loadFlows(!silent, false);
 }
 
+async function exportFlows() {
+  try {
+    const data = await fetchJSON("/api/flows/export");
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "mcp-flows-export.json";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    pushFeed("success", "Flows exported");
+  } catch (err) {
+    pushFeed("error", `Export failed: ${err.message}`);
+  }
+}
+
+async function importFlows(e) {
+  const file = e.target.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const flows = JSON.parse(text);
+    await fetchJSON("/api/flows/import", {
+      method: "POST",
+      body: JSON.stringify({ flows }),
+    });
+    pushFeed("success", "Flows imported");
+    await loadFlows();
+  } catch (err) {
+    pushFeed("error", `Import failed: ${err.message}`);
+  } finally {
+    e.target.value = "";
+  }
+}
+
 async function stopAllFlows() {
   state.stoppingAllFlows = true;
   renderStats();
@@ -1008,6 +1048,13 @@ function bindEvents() {
       state.inspectorHost = e.target.value || "localhost";
       localStorage.setItem("mcp_inspector_host", state.inspectorHost);
     });
+  }
+  if (el.exportFlows) {
+    el.exportFlows.addEventListener("click", exportFlows);
+  }
+  if (el.importFlows && el.importFile) {
+    el.importFlows.addEventListener("click", () => el.importFile.click());
+    el.importFile.addEventListener("change", importFlows);
   }
 }
 

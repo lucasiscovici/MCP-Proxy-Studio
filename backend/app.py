@@ -173,6 +173,10 @@ class FlowStore:
                 return flow
         return None
 
+    async def replace_all(self, flows: List[Flow]) -> None:
+        async with self.lock:
+            self._write(flows)
+
 
 @dataclass
 class ProcessInfo:
@@ -898,6 +902,21 @@ async def update_flow(flow_id: str, payload: FlowUpdate) -> FlowResponse:
     state = await manager._state(flow_id)
     logs = await manager.logs(flow_id)
     return FlowResponse(**updated_flow.model_dump(), state=state, logs=logs, last_event=state.get("last_event"))
+
+
+@app.get("/api/flows/export", response_model=List[Flow])
+async def export_flows() -> List[Flow]:
+    return await store.list()
+
+
+class ImportPayload(BaseModel):
+    flows: List[Flow]
+
+
+@app.post("/api/flows/import")
+async def import_flows(payload: ImportPayload) -> Dict[str, Any]:
+    await store.replace_all(payload.flows)
+    return {"imported": len(payload.flows)}
 
 
 @app.delete("/api/flows/{flow_id}")
