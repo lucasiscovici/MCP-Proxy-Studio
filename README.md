@@ -10,9 +10,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/github/license/lucasiscovici/MCP-Proxy-Studio" />
+  <img src="https://img.shields.io/badge/License-MIT-yellow.svg" />
   <img src="https://img.shields.io/github/stars/lucasiscovici/MCP-Proxy-Studio" />
-  <img src="https://img.shields.io/github/v/release/lucasiscovici/MCP-Proxy-Studio" />
 </p>
 
 ---
