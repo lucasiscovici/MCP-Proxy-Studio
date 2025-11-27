@@ -43,20 +43,28 @@
 
 ## 📦 Quick Start
 
-### One-liner (npx)
+### One-liner to start (npx)
 ```bash
 npx --yes github:lucasiscovici/MCP-Proxy-Studio start
+````
+
+### One-liner to stop (npx)
+```bash
+npx --yes github:lucasiscovici/MCP-Proxy-Studio stop
+```
+
+### Others
+```bash
 # Optional:
 # npx --yes github:lucasiscovici/MCP-Proxy-Studio stop
 # npx --yes github:lucasiscovici/MCP-Proxy-Studio status
 # npx --yes github:lucasiscovici/MCP-Proxy-Studio update
-````
+```
 
 ### Docker Compose
 
 ```bash
-cd web-ui-mcp-proxy
-docker-compose up --build
+git clone https://github.com/lucasiscovici/MCP-Proxy-Studio.git && cd web-ui-mcp-proxy && docker-compose up -d --build
 ```
 
 Open: **[http://localhost:8000](http://localhost:8000)**
