@@ -32,8 +32,8 @@ RUNTIME_DIR = DATA_PATH.parent / "runtime"
 SETTINGS_PATH = DATA_PATH.parent / "settings.json"
 FRONTEND_DIR = BASE_DIR / "frontend"
 PROXY_BINARY = os.environ.get("MCP_PROXY_BIN", "mcp-proxy")
-INSPECTOR_PORT = int(os.environ.get("MCP_INSPECTOR_PORT", "6275"))
-INSPECTOR_SERVER_PORT = int(os.environ.get("MCP_INSPECTOR_SERVER_PORT", "6285"))
+INSPECTOR_PORT = int(os.environ.get("MCP_INSPECTOR_PORT", "6274"))
+INSPECTOR_SERVER_PORT = int(os.environ.get("MCP_INSPECTOR_SERVER_PORT", "6277"))
 DEFAULT_INSPECTOR_SERVER_PORT = 6277
 INSPECTOR_BIN = os.environ.get("MCP_INSPECTOR_BIN", "npx -y @modelcontextprotocol/inspector")
 INSPECTOR_HOST = os.environ.get("MCP_INSPECTOR_HOST", "0.0.0.0")
@@ -544,6 +544,7 @@ class ProcessManager:
         proxy_type = "openapi" if is_openapi else None
         if is_openapi:
             servers: Dict[str, Any] = {}
+            ready_flow_ids: set[str] = set()
             # Allow upstream targets a brief moment to finish booting before mcpo starts
             await asyncio.sleep(0.5)
             for flow in flows.values():
@@ -559,6 +560,7 @@ class ProcessManager:
                         "args": flow.args,
                         "env": flow.env,
                     }
+                    ready_flow_ids.add(flow.id)
                 else:
                     upstream_url = flow.sse_url or ""
                     parsed = urlparse(upstream_url)
@@ -577,9 +579,12 @@ class ProcessManager:
                     # Extra readiness check: ensure upstream HTTP endpoint is reachable (non-404)
                     ready = await self._wait_upstream_ready(upstream_url, timeout=12)
                     if not ready:
-                        logger.warning("Upstream endpoint %s not ready for OpenAPI flow %s", upstream_url, flow.id)
+                        logger.warning("Upstream endpoint %s not ready for OpenAPI flow %s (skipping)", upstream_url, flow.id)
                         # Skip adding this server to avoid broken mcpo
                         continue
+                    else:
+                        logger.info("Upstream endpoint %s ready for OpenAPI flow %s", upstream_url, flow.id)
+                        ready_flow_ids.add(flow.id)
                 servers[server_key] = {
                     "type": "streamable-http" if flow.source_type == EndpointType.STREAMABLE_HTTP else "sse",
                     "url": upstream_url,
@@ -587,6 +592,13 @@ class ProcessManager:
                 }
                 servers[server_key] = {k: v for k, v in servers[server_key].items() if v not in (None, {}, [])}
             config = {"mcpServers": servers}
+            if not servers:
+                logger.warning("No upstream servers ready for OpenAPI port %s, skipping mcpo start", port)
+                # purge flows that failed readiness so they won't auto-restart in a loop
+                self.active_ports[port] = set()
+                raise HTTPException(status_code=503, detail="OpenAPI upstream not ready")
+            # keep only flows that are actually ready on this port
+            self.active_ports[port] = ready_flow_ids
             RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
             config_path = RUNTIME_DIR / f"port-{port}-openapi.config.json"
             config_path.write_text(json.dumps(config, indent=2), encoding="utf-8")
@@ -594,7 +606,7 @@ class ProcessManager:
             logger.info(
                 "Restarting OpenAPI port %s with flows=%s cmd=%s config=%s",
                 port,
-                ",".join(list(ids)),
+                ",".join(sorted(list(ready_flow_ids))),
                 " ".join(cmd),
                 config_path,
             )

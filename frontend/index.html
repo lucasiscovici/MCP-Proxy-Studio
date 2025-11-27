@@ -4,6 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>MCP Proxy Dashboard</title>
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.ico">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -28,6 +29,11 @@
         <span>Running</span>
       </div>
       <div class="stat-card">
+        <p>Flows in error</p>
+        <h3 id="stat-error">0</h3>
+        <span>Error</span>
+      </div>
+      <div class="stat-card">
         <p>Configured flows</p>
         <h3 id="stat-total">0</h3>
         <span>Catalog</span>
@@ -41,16 +47,24 @@
   </header>
 
   <main class="layout">
-    <div class="toolbar toolbar--inline">
-      <div class="toolbar__group">
-        <span class="muted">MCP Inspector</span>
-        <button class="button button--tiny" id="toggle-inspector">Start/Stop</button>
-        <button class="button button--tiny button--ghost" id="open-inspector" disabled>Open</button>
+    <div class="toolbar toolbar--inline toolbar--anchored">
+      <div class="toolbar__group inspector-bar">
+        <span class="muted inspector-label">Inspector</span>
+        <label class="switch switch--compact" title="Toggle Inspector">
+          <input type="checkbox" id="toggle-inspector" aria-label="Inspector power">
+          <span class="slider"></span>
+        </label>
+        <div class="toolbar__menu">
+          <button id="actions-menu" class="button button--ghost button--icon" aria-haspopup="true" aria-expanded="false" title="More inspector actions">⋯</button>
+          <div id="actions-dropdown" class="dropdown hidden">
+            <button id="open-inspector" class="dropdown__item" disabled>Open inspector</button>
+            <button id="export-flows" class="dropdown__item">Export</button>
+            <button id="import-flows" class="dropdown__item">Import</button>
+          </div>
+        </div>
       </div>
-      <div class="toolbar__group">
-        <button id="open-settings-panel" class="button button--ghost">Settings</button>
-        <button id="export-flows" class="button button--ghost">Export</button>
-        <button id="import-flows" class="button button--ghost">Import</button>
+      <div class="toolbar__group toolbar__group--tight">
+        <button id="open-settings-panel" class="button button--ghost button--icon" title="Open settings">⚙</button>
         <input type="file" id="import-file" accept=".json" class="hidden" />
       </div>
     </div>
@@ -61,7 +75,7 @@
           <p class="eyebrow">Flows</p>
           <h2 class="title-strong">Your MCP proxies</h2>
         </div>
-        <div class="panel__actions">
+        <div class="panel__actions panel__actions--flows">
           <input type="search" id="search" placeholder="Search by name/description" class="input--compact">
           <select id="mode-filter" class="input--compact">
             <option value="all">All modes</option>
@@ -69,13 +83,21 @@
             <option value="source_stdio">Source stdio</option>
             <option value="source_sse">Source sse</option>
             <option value="source_streamable_http">Source streamable_http</option>
+            <option value="source_openapi">Source openapi</option>
+            <option value="target_sse">Target sse</option>
+            <option value="target_streamable_http">Target streamable_http</option>
+            <option value="target_openapi">Target openapi</option>
           </select>
           <button id="start-all" class="button button--primary">Start all</button>
-          <label class="toggle">
+          <!-- <label class="switch switch--compact switch--text">
             <input type="checkbox" id="show-only-running">
-            <span>Show only running</span>
-          </label>
-          <button id="toggle-form" class="button button--ghost">Create flow</button>
+            <span class="slider"></span>
+            <span class="switch__label">Show only running</span>
+          </label> -->
+          <button id="toggle-form" class="button button--primary button--elevated">
+            <span class="button__icon">＋</span>
+            <span>Create flow</span>
+          </button>
         </div>
       </div>
       <div id="flow-list" class="flow-list"></div>
@@ -91,102 +113,249 @@
           <button id="close-settings" class="button button--ghost">Close</button>
         </div>
         <div class="form form--inline">
-          <label class="toggle">
+          <label class="switch switch--compact switch--text">
             <input type="checkbox" id="auto-start">
-            <span>Auto-start on load</span>
+            <span class="slider"></span>
+            <span class="switch__label">Auto-start on load</span>
           </label>
-          <label class="toggle">
+          <label class="switch switch--compact switch--text">
             <input type="checkbox" id="persist-events">
-            <span>Persist events</span>
+            <span class="slider"></span>
+            <span class="switch__label">Persist events</span>
           </label>
-          <label class="toggle">
+          <label class="switch switch--compact switch--text">
             <input type="checkbox" id="auto-start-inspector">
-            <span>Auto-start Inspector</span>
+            <span class="slider"></span>
+            <span class="switch__label">Auto-start Inspector</span>
           </label>
         </div>
       </div>
     </div>
 
     <div class="modal hidden" id="form-modal">
-      <div class="modal__content">
-        <div class="panel__header">
-          <div>
-            <p class="eyebrow">Configuration</p>
-            <h2 id="form-title">Create a flow</h2>
-          </div>
-          <div class="panel__actions">
-            <button id="reset-form" class="button button--ghost">Reset</button>
-            <button id="close-form" class="button button--ghost">Close</button>
-          </div>
-        </div>
-        <form id="flow-form" class="form">
+      <div class="modal__content modal__content--form">
+        <form id="flow-form" class="form form-shell">
           <input type="hidden" name="id" id="flow-id">
-          <label>
-            <span>Route (URL key)</span>
-            <input type="text" id="route" name="route" placeholder="route-name">
-          </label>
-          <label>
-            <span>Name</span>
-            <input type="text" id="name" name="name" required placeholder="fetch-prod, github, etc.">
-          </label>
-          <label>
-            <span>Description</span>
-            <textarea id="description" name="description" rows="2" placeholder="What is this flow for?"></textarea>
-          </label>
-          <label>
-            <span>Source</span>
-            <select id="source_type" name="source_type">
-              <option value="stdio">stdio</option>
-              <option value="sse">sse</option>
-              <option value="streamable_http">streamable_http</option>
-              <option value="openapi">openapi</option>
-            </select>
-          </label>
-          <label>
-            <span>Target / exposed</span>
-          <select id="target_type" name="target_type">
-            <option value="sse">sse</option>
-            <option value="streamable_http">streamable_http</option>
-            <option value="openapi">openapi</option>
-          </select>
-        </label>
-          <div class="grid-2">
-            <label>
-              <span>URL (for sse/streamable_http source)</span>
-              <input type="text" id="sse_url" name="sse_url" placeholder="https://example.io/sse">
-            </label>
-            <label>
-              <span>Headers (one per line: KEY: VALUE)</span>
-              <textarea id="headers" name="headers" rows="2" placeholder="Authorization: Bearer token"></textarea>
-            </label>
+          <div class="modal__header modal__header--sticky">
+            <div class="modal__title">
+              <p class="eyebrow">Configuration</p>
+              <div class="modal__heading">
+                <h2 id="form-title">Create a flow</h2>
+                <p class="modal__subtitle">Route, commands, and security in one place.</p>
+              </div>
+            </div>
+            <div class="modal__header-actions">
+              <button type="button" id="paste-json" class="button button--ghost button--pill">Paste JSON</button>
+              <button type="button" id="reset-form" class="button button--text button--danger-ghost">Reset form</button>
+              <button type="button" id="close-form" class="button button--icon" aria-label="Close">
+                ✕
+              </button>
+            </div>
           </div>
-          <div class="grid-2">
-            <label>
-              <span>OpenAPI base URL (openapi source)</span>
-              <input type="text" id="openapi_base_url" name="openapi_base_url" placeholder="https://api.example.com">
-            </label>
-            <label>
-              <span>OpenAPI spec URL</span>
-              <input type="text" id="openapi_spec_url" name="openapi_spec_url" placeholder="https://api.example.com/openapi.json">
-            </label>
+
+          <div class="modal__body">
+            <div class="form-section" id="section-basics">
+              <div class="form-section__header">
+                <div class="form-section__title">
+                  <span class="section-icon">★</span>
+                  <div>
+                    <p class="eyebrow">Basics</p>
+                    <p class="section-subtitle">Name and context</p>
+                  </div>
+                </div>
+                <div class="form-section__errors hidden" id="basics-errors"></div>
+              </div>
+              <div class="form-grid form-grid--two">
+                <label class="field" data-field="name">
+                  <div class="label-row">
+                    <span>Name</span>
+                  </div>
+                  <input type="text" id="name" name="name" required placeholder="fetch-prod, github, etc.">
+                  <small class="helper">Internal name for the flow.</small>
+                </label>
+                <label class="field" data-field="description">
+                  <div class="label-row">
+                    <span>Description</span>
+                  </div>
+                  <textarea id="description" name="description" rows="2" placeholder="What is this flow for?"></textarea>
+                  <small class="helper">Optional short context.</small>
+                </label>
+              </div>
+            </div>
+
+            <div class="form-divider"></div>
+
+            <div class="form-section" id="section-routing">
+              <div class="form-section__header">
+                <div class="form-section__title">
+                  <span class="section-icon">⤳</span>
+                  <div>
+                    <p class="eyebrow">Routing</p>
+                    <p class="section-subtitle">Source, target, and slug</p>
+                  </div>
+                </div>
+                <div class="form-section__errors hidden" id="routing-errors"></div>
+              </div>
+              <div class="form-grid form-grid--two">
+                <label class="field" data-field="source_type">
+                  <div class="label-row">
+                    <span>Source</span>
+                  </div>
+                  <select id="source_type" name="source_type">
+                    <option value="stdio">stdio</option>
+                    <option value="sse">sse</option>
+                    <option value="streamable_http">streamable_http</option>
+                    <option value="openapi">openapi</option>
+                  </select>
+                  <small class="helper">Where this flow reads from.</small>
+                </label>
+                <label class="field" data-field="target_type">
+                  <div class="label-row">
+                    <span>Target</span>
+                  </div>
+                  <select id="target_type" name="target_type">
+                    <option value="sse">sse</option>
+                    <option value="streamable_http">streamable_http</option>
+                    <option value="openapi">openapi</option>
+                  </select>
+                  <small class="helper">Exposed via SSE / streamable HTTP.</small>
+                </label>
+                <label class="field" data-field="route">
+                  <div class="label-row">
+                    <span>Route</span>
+                    <span class="status-pill" id="route-status">Slug</span>
+                  </div>
+                  <input type="text" id="route" name="route" placeholder="route-name">
+                  <small class="helper">Used as URL slug.</small>
+                </label>
+                <label class="field full-span" data-field="sse_url">
+                  <div class="label-row">
+                    <span>URL</span>
+                  </div>
+                  <input type="text" id="sse_url" name="sse_url" placeholder="https://example.io/sse">
+                  <small class="helper">For sse/streamable_http sources.</small>
+                </label>
+                <label class="field full-span" data-field="headers">
+                  <div class="label-row">
+                    <span>Headers</span>
+                  </div>
+                  <textarea id="headers" name="headers" rows="2" placeholder="Authorization: Bearer token"></textarea>
+                  <small class="helper">One per line: KEY: VALUE</small>
+                </label>
+                <div class="form-grid form-grid--two full-span openapi-grid">
+                  <label class="field" data-field="openapi_base_url">
+                    <div class="label-row">
+                      <span>OpenAPI base URL</span>
+                    </div>
+                    <input type="text" id="openapi_base_url" name="openapi_base_url" placeholder="https://api.example.com">
+                  </label>
+                  <label class="field" data-field="openapi_spec_url">
+                    <div class="label-row">
+                      <span>OpenAPI spec URL</span>
+                    </div>
+                    <input type="text" id="openapi_spec_url" name="openapi_spec_url" placeholder="https://api.example.com/openapi.json">
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-divider" data-field-divider="command"></div>
+
+            <div class="form-section" id="section-command" data-field="command-block">
+              <div class="form-section__header">
+                <div class="form-section__title">
+                  <span class="section-icon">⌘</span>
+                  <div>
+                    <p class="eyebrow">Command</p>
+                    <p class="section-subtitle">Runs when Source = stdio</p>
+                  </div>
+                </div>
+                <div class="form-section__errors hidden" id="command-errors"></div>
+              </div>
+              <div class="command-builder">
+                <div class="command-row">
+                  <label class="field" data-field="command">
+                    <div class="label-row">
+                      <span>Command</span>
+                    </div>
+                    <div class="command-input">
+                      <span class="command-prefix">$</span>
+                      <input type="text" id="command" name="command" placeholder="uvx mcp-server-fetch">
+                    </div>
+                    <small class="helper">Monospace shell command</small>
+                  </label>
+                  <label class="field" data-field="args">
+                    <div class="label-row">
+                      <span>Args</span>
+                    </div>
+                    <input type="text" id="args" name="args" placeholder="--user-agent=myapp">
+                    <small class="helper">Space-separated args.</small>
+                  </label>
+                  <button type="button" class="button button--ghost button--icon command-copy" id="copy-command" aria-label="Copy command">
+                    ⧉
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="form-divider" data-field-divider="env"></div>
+
+            <div class="form-section" id="section-environment" data-field="env-group">
+              <div class="form-section__header">
+                <div class="form-section__title">
+                  <span class="section-icon">☰</span>
+                  <div>
+                    <p class="eyebrow">Environment</p>
+                    <p class="section-subtitle">Key=value blocks</p>
+                  </div>
+                </div>
+                <div class="form-section__errors hidden" id="env-errors"></div>
+              </div>
+              <div class="field" data-field="env">
+                <div class="label-row">
+                  <span>Env</span>
+                </div>
+                <textarea id="env" name="env" rows="3" placeholder="API_KEY=xxx&#10;REGION=eu-west-1&#10;DEBUG=0" class="code-area"></textarea>
+                <small class="helper">One per line, KEY=VALUE.</small>
+              </div>
+            </div>
+
+            <div class="form-divider"></div>
+
+            <div class="form-section" id="section-security" data-field="security-group">
+              <div class="form-section__header">
+                <div class="form-section__title">
+                  <span class="section-icon">🔒</span>
+                  <div>
+                    <p class="eyebrow">Security</p>
+                    <p class="section-subtitle">CORS and access</p>
+                  </div>
+                </div>
+                <div class="form-section__errors hidden" id="security-errors"></div>
+              </div>
+              <div class="field" data-field="allow_origins">
+                <div class="label-row">
+                  <span>Allowed CORS origins</span>
+                </div>
+                <div class="chips-input">
+                  <div class="chips" id="allow-origins-chips"></div>
+                  <input type="text" id="allow-origins-entry" class="chips-entry" placeholder="https://myapp.com" aria-label="Add allowed origin">
+                  <input type="hidden" id="allow_origins" name="allow_origins" placeholder="* , https://myapp.com">
+                </div>
+                <small class="helper">Add origins as tags. Use * for any origin.</small>
+              </div>
+            </div>
           </div>
-          <label>
-            <span>Stdio command (for stdio source)</span>
-            <input type="text" id="command" name="command" placeholder="uvx mcp-server-fetch">
-          </label>
-          <label>
-            <span>Extra arguments (space separated)</span>
-            <input type="text" id="args" name="args" placeholder="--user-agent=myapp">
-          </label>
-          <label>
-            <span>Env (one per line: KEY=VALUE)</span>
-            <textarea id="env" name="env" rows="2" placeholder="API_KEY=xxx"></textarea>
-          </label>
-          <label>
-            <span>Allowed CORS origins (comma separated)</span>
-            <input type="text" id="allow_origins" name="allow_origins" placeholder="* , https://myapp.com">
-          </label>
-          <button type="submit" class="button button--primary">Save</button>
+
+          <div class="modal__footer modal__footer--sticky">
+            <div class="modal__footer-left">
+              <button type="button" class="button button--ghost" id="cancel-form">Cancel</button>
+            </div>
+            <div class="modal__footer-actions">
+              <!-- <button type="button" class="button button--ghost" id="save-start">Save &amp; start</button> -->
+              <button type="submit" class="button button--primary" id="save-flow">Save</button>
+            </div>
+          </div>
         </form>
       </div>
     </div>
@@ -200,17 +369,20 @@
       <button id="close-settings" class="button button--ghost">Close</button>
     </div>
     <div class="form form--inline">
-      <label class="toggle">
+      <label class="switch switch--compact switch--text">
         <input type="checkbox" id="auto-start">
-        <span>Auto-start on load</span>
+        <span class="slider"></span>
+        <span class="switch__label">Auto-start on load</span>
       </label>
-      <label class="toggle">
+      <label class="switch switch--compact switch--text">
         <input type="checkbox" id="persist-events">
-        <span>Persist events</span>
+        <span class="slider"></span>
+        <span class="switch__label">Persist events</span>
       </label>
-        <label class="toggle">
+        <label class="switch switch--compact switch--text">
           <input type="checkbox" id="auto-start-inspector">
-          <span>Auto-start Inspector</span>
+          <span class="slider"></span>
+          <span class="switch__label">Auto-start Inspector</span>
         </label>
         <label>
           <span>Inspector host</span>
@@ -225,15 +397,30 @@
           <p class="eyebrow">Live</p>
           <h2>Live events</h2>
         </div>
-        <button id="toggle-events" class="button button--ghost">Minimize</button>
-        <button id="clear-feed" class="button button--ghost">Clear</button>
+        <div class="panel__actions panel__actions--feed">
+          <label class="switch switch--compact switch--text">
+            <input type="checkbox" id="auto-scroll-feed" checked>
+            <span class="slider"></span>
+            <span class="switch__label">Auto-scroll</span>
+          </label>
+          <label class="switch switch--compact switch--text">
+            <input type="checkbox" id="errors-only">
+            <span class="slider"></span>
+            <span class="switch__label">Errors only</span>
+          </label>
+          <button id="toggle-events" class="button button--ghost">Minimize</button>
+          <button id="clear-feed" class="button button--ghost">Clear</button>
+        </div>
       </div>
       <div id="live-feed" class="feed"></div>
     </section>
   </main>
 
   <script type="module" src="/static/main.js"></script>
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden">
+    <span id="toast-message"></span>
+    <button id="toast-close" class="toast__close" aria-label="Close notification">✕</button>
+  </div>
   <style>
     .toast {
       position: fixed;
@@ -246,6 +433,9 @@
       font-size: 14px;
       z-index: 9999;
       box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
     }
     .toast.hidden {
       display: none;
@@ -258,6 +448,13 @@
     }
     .toast--info {
       background: #1a73e8;
+    }
+    .toast__close {
+      background: transparent;
+      border: none;
+      color: inherit;
+      cursor: pointer;
+      font-size: 14px;
     }
   </style>
 </body>

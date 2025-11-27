@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="MCP Proxy">
+  <defs>
+    <linearGradient id="g" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#5f48c8"/>
+      <stop offset="100%" stop-color="#92d642"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="#0b0c10" stroke="url(#g)" stroke-width="4"/>
+  <path d="M18 44V20h6l8 12 8-12h6v24h-6V31l-8 11-8-11v13z" fill="url(#g)"/>
+</svg>
