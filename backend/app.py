@@ -632,6 +632,16 @@ class ProcessManager:
                     upstream_url = flow.sse_url
                     if flow.source_type == EndpointType.OPENAPI:
                         upstream_url = await self._ensure_openapi_helper(flow)
+                    # # Normalize host to a reachable origin (avoid 0.0.0.0/localhost mismatch)
+                    # if upstream_url:
+                    #     parsed = urlparse(upstream_url)
+                    #     upstream_host = parsed.hostname or ""
+                    #     if upstream_host in {"0.0.0.0", "localhost"}:
+                    #         settings = await settings_store.get()
+                    #         override_host = settings.inspector_public_host or "host.docker.internal"
+                    #         netloc = f"{override_host}:{parsed.port}" if parsed.port else override_host
+                    #         parsed = parsed._replace(netloc=netloc)
+                    #         upstream_url = urlunparse(parsed)
                     servers[server_key] = {
                         "url": upstream_url,
                         "headers": [{h.key: h.value} for h in flow.headers] if flow.headers else None,
@@ -749,14 +759,15 @@ class InspectorManager:
             if self.process and self.process.returncode is None:
                 await self._stop_process()
             token = secrets.token_hex(32)
+            settings = await settings_store.get()
+            public_host = settings.inspector_public_host or INSPECTOR_PUBLIC_HOST
             env = os.environ.copy()
             env["MCP_PROXY_AUTH_TOKEN"] = token
             env["MCP_AUTO_OPEN_ENABLED"] = "false"
             env["CLIENT_PORT"] = str(INSPECTOR_PORT)
             env["SERVER_PORT"] = str(INSPECTOR_SERVER_PORT)
             env["HOST"] = INSPECTOR_HOST
-            settings = await settings_store.get()
-            public_host = settings.inspector_public_host or INSPECTOR_PUBLIC_HOST
+            env["ALLOWED_ORIGINS"] = f"http://0.0.0.0:{INSPECTOR_PORT},http://localhost:{INSPECTOR_PORT},http://host.docker.internal:{INSPECTOR_PORT}"
             cmd = shlex.split(INSPECTOR_BIN)
             self.url = f"http://{public_host}:{INSPECTOR_PORT}/?MCP_PROXY_AUTH_TOKEN={token}"
             if INSPECTOR_SERVER_PORT != DEFAULT_INSPECTOR_SERVER_PORT:
@@ -832,6 +843,30 @@ app.add_middleware(
 
 if FRONTEND_DIR.exists():
     app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
+
+
+@app.on_event("startup")
+async def auto_start_inspector() -> None:
+    try:
+        await inspector.start()
+        logger.info("Inspector auto-started on startup")
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Inspector auto-start failed: %s", exc)
+
+
+@app.on_event("startup")
+async def auto_start_flows() -> None:
+    try:
+        flows = await store.list()
+        for flow in flows:
+            if getattr(flow, "auto_start", True):
+                try:
+                    await manager.start(flow)
+                    logger.info("Auto-started flow %s", flow.id)
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Auto-start flow %s failed: %s", flow.id, exc)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("Auto-start flows failed: %s", exc)
 
 
 @app.get("/api/flows", response_model=List[FlowResponse])

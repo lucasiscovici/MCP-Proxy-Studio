@@ -277,35 +277,32 @@ function updateTargetOptions() {
   const source = field("source_type").value;
   const select = field("target_type");
   if (!select) return;
-  let mustChange = false;
   Array.from(select.options).forEach((opt) => {
-    const disableSame = opt.value === source;
     const disableStdio = opt.value === "stdio";
-    const disabled = disableSame || disableStdio;
+    const disabled = disableStdio;
     opt.disabled = disabled;
     opt.hidden = disabled;
-    if (disabled && select.value === opt.value) {
-      mustChange = true;
-    }
   });
-  if (mustChange || select.value === "stdio") {
-    const fallback =
-      source === "streamable_http" ? "sse" : source === "sse" ? "streamable_http" : "streamable_http";
-    select.value = fallback;
-  }
-  if (source === "openapi") {
-    select.value = "streamable_http";
+  if (select.value === "stdio") {
+    select.value = source || "streamable_http";
   }
 }
 
+let loadFlowsInFlight = false;
+let lastLoadAt = 0;
+
 async function loadFlows(log = true, forceLog = false) {
+  const now = Date.now();
+  // Throttle rapid re-entrancy (avoid tight loops)
+  if (loadFlowsInFlight || now - lastLoadAt < 500) return;
+  loadFlowsInFlight = true;
   try {
     const data = await fetchJSON("/api/flows");
-    const autoKey = localStorage.getItem("mcp_auto_start") === "1";
-    const bootKey = localStorage.getItem("mcp_auto_start_boot");
-    const bootId = state.bootId;
-    const shouldAuto = autoKey && bootId && !state.autoStartedSession && bootKey !== bootId;
-    if (shouldAuto) {
+  const autoKey = localStorage.getItem("mcp_auto_start") === "1";
+  const bootKey = localStorage.getItem("mcp_auto_start_boot");
+  const bootId = state.bootId;
+  const shouldAuto = autoKey && bootId && !state.autoStartedSession && bootKey !== bootId;
+  if (shouldAuto) {
       state.autoStartingFlows = true;
     }
     state.flows = data;
@@ -316,31 +313,18 @@ async function loadFlows(log = true, forceLog = false) {
       state.firstLoadLogged = true;
     }
     if (shouldAuto) {
-      if (!state.autoStartStartedLogged) {
-        pushFeed("info", "Auto-start flows in progress...");
-        showToast("Auto-starting flows...", "info", 0, true);
-        state.autoStartStartedLogged = true;
-      }
-      state.autoStartingFlows = true;
-      renderStats();
-      await startAllFlows(true, true);
+      // Backend now handles auto-start; just mark session
+      state.autoStartingFlows = false;
       state.autoStartedSession = true;
       sessionStorage.setItem("mcp_auto_started_session", "1");
       sessionStorage.setItem("mcp_auto_started_boot", bootId);
       localStorage.setItem("mcp_auto_start_boot", bootId);
-      if (!state.autoStartLogged) {
-        pushFeed("info", "Auto-start done");
-        showToast("Flows auto-started", "success", 2500);
-        state.autoStartLogged = true;
-      } else {
-        hideToast();
-      }
-      state.autoStartingFlows = false;
-      renderStats();
     }
   } catch (err) {
     pushFeed("error", `Load error: ${err.message}`);
   }
+  lastLoadAt = Date.now();
+  loadFlowsInFlight = false;
 }
 
 async function loadSettings() {
@@ -1238,21 +1222,21 @@ async function autoStartInspectorIfNeeded() {
     }
     el.toggleInspector.disabled = true;
     el.openInspector.disabled = true;
-    await fetchJSON("/api/inspector/start", { method: "POST", body: JSON.stringify({}) });
-    const url = await waitInspectorUrl();
-    state.inspectorUrl = url;
-    el.openInspector.disabled = !url;
+    // Backend handles inspector auto-start; just poll state
+    const stateInfo = await fetchJSON("/api/inspector/state");
+    state.inspectorUrl = stateInfo.url || null;
+    el.openInspector.disabled = !state.inspectorUrl;
     if (el.toggleInspector) {
-      el.toggleInspector.checked = Boolean(url);
+      el.toggleInspector.checked = Boolean(state.inspectorUrl);
     }
     state.inspectorAutoStarted = true;
     sessionStorage.setItem("mcp_auto_started_inspector_boot", state.bootId);
     localStorage.setItem("mcp_auto_start_inspector_boot", state.bootId);
     if (!state.autoStartInspectorLogged) {
-      pushFeed("info", "Inspector auto-start done");
+      pushFeed("info", "Inspector auto-start handled by backend");
       state.autoStartInspectorLogged = true;
     }
-    showToast("Inspector auto-started", "success", 2400);
+    showToast("Inspector ready", "success", 2400);
   } catch (err) {
     pushFeed("error", `Auto-start inspector: ${err.message}`);
     showToast(`Inspector start failed: ${err.message}`, "error", 0, true);
@@ -1298,7 +1282,7 @@ function buildInspectorUrl(flow) {
       ? state.settings.inspector_public_host || "host.docker.internal"
       : state.settings.host;
     const targetUrl = `http://${targetHost}:${targetPort}/${flow.route || flow.name}/${endpointPath}`;
-    url.searchParams.set("transportType", isOpenApi ? "openapi" : isStream ? "streamable-http" : "sse");
+    url.searchParams.set("transport", isOpenApi ? "openapi" : isStream ? "streamable-http" : "sse");
     url.searchParams.set("serverUrl", targetUrl);
   }
   return url.toString();
