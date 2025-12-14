@@ -38,6 +38,7 @@ const state = {
   lastStartAll: 0,
   failedFlows: {},
   flowErrorCounts: {},
+  restartBusy: false,
 };
 
 function recordFlowError(flow, message) {
@@ -62,6 +63,7 @@ const el = {
   resetForm: document.getElementById("reset-form"),
   startAll: document.getElementById("start-all"),
   refreshFlows: document.getElementById("refresh-flows"),
+  restartServer: document.getElementById("restart-server"),
   autoStartToggle: document.getElementById("auto-start"),
   formModal: document.getElementById("form-modal"),
   toggleForm: document.getElementById("toggle-form"),
@@ -292,12 +294,15 @@ function updateTargetOptions() {
   if (!select) return;
   Array.from(select.options).forEach((opt) => {
     const disableStdio = opt.value === "stdio";
-    const disabled = disableStdio;
+    const disallowSseFromOpenApi = source === "openapi" && opt.value === "sse";
+    const disabled = disableStdio || disallowSseFromOpenApi;
     opt.disabled = disabled;
     opt.hidden = disabled;
   });
   if (select.value === "stdio") {
     select.value = source || "streamable_http";
+  } else if (source === "openapi" && select.value === "sse") {
+    select.value = "openapi";
   }
 }
 
@@ -438,6 +443,10 @@ function renderStats() {
   if (el.pasteJson) {
     el.pasteJson.textContent = state.pasteBusy ? "Pasting..." : "Paste JSON";
     el.pasteJson.disabled = state.pasteBusy;
+  }
+  if (el.restartServer) {
+    el.restartServer.textContent = state.restartBusy ? "Restarting..." : "Restart server";
+    el.restartServer.disabled = state.restartBusy || state.autoStartingFlows || state.stoppingAllFlows;
   }
   if (el.toggleInspector) {
     el.toggleInspector.disabled = state.autoStartingInspector || state.autoStartingFlows;
@@ -685,10 +694,9 @@ async function handleCardAction(ev, flow) {
       state.flowBusy[flow.id] = "start";
       renderFlows();
       await fetchJSON(`/api/flows/${flow.id}/start`, { method: "POST" });
-      pushFeed(
-        "success",
-        `Flow ${flow.name} started -> target ${flow.target_type === "streamable_http" ? "streamable-http" : "sse"}`
-      );
+      const targetLabel =
+        flow.target_type === "openapi" ? "openapi" : flow.target_type === "streamable_http" ? "streamable-http" : "sse";
+      pushFeed("success", `Flow ${flow.name} started -> target ${targetLabel}`);
     }
     if (action === "stop") {
       state.flowBusy = state.flowBusy || {};
@@ -822,13 +830,15 @@ function syncTransportFields() {
   const showOpenApi = sourceType === "openapi";
   toggleField("openapi_base_url", showOpenApi);
   toggleField("openapi_spec_url", showOpenApi);
-  // When OpenAPI is selected, force target to streamable_http and lock other options
+  // When OpenAPI is selected as a source, keep targets to openapi/streamable_http (no sse/stdio)
   if (targetSelect) {
     Array.from(targetSelect.options).forEach((opt) => {
-      opt.disabled = showOpenApi && opt.value !== "streamable_http";
+      const disallow = showOpenApi && opt.value === "sse";
+      opt.disabled = disallow;
     });
-    if (showOpenApi) {
-      targetSelect.value = "streamable_http";
+    const selected = targetSelect.value;
+    if (showOpenApi && selected === "sse") {
+      targetSelect.value = "openapi";
     }
   }
   if (showOpenApi) {
@@ -1132,6 +1142,26 @@ async function startAllFlows(silent = false, onlyAuto = false) {
   await loadFlows(!silent, false);
   if (!silent) {
     showToast("Flows started", "success", 2400);
+  }
+}
+
+async function restartServer() {
+  if (state.restartBusy) return;
+  if (!confirm("Restart dashboard and all proxy processes?")) return;
+  state.restartBusy = true;
+  renderStats();
+  try {
+    await fetchJSON("/api/restart", { method: "POST" });
+    pushFeed("warn", "Restart requested. The page will reload shortly.");
+    showToast("Restarting server...", "info", 0, true);
+    setTimeout(() => {
+      window.location.reload();
+    }, 2000);
+  } catch (err) {
+    state.restartBusy = false;
+    pushFeed("error", `Restart failed: ${err.message}`);
+    showToast(err.message, "error", 2600);
+    renderStats();
   }
 }
 
@@ -1586,6 +1616,9 @@ function bindEvents() {
         }
       }
     });
+  }
+  if (el.restartServer) {
+    el.restartServer.addEventListener("click", restartServer);
   }
   if (el.autoStartToggle) {
     el.autoStartToggle.addEventListener("change", (e) => {

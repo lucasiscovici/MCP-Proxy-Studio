@@ -84,7 +84,10 @@ release: login-docker
 	NEW_VERSION=$$(cat VERSION); \
 	echo "New version: $$NEW_VERSION"; \
 	$(MAKE) build VERSION=$$NEW_VERSION; \
-	$(MAKE) deploy VERSION=$$NEW_VERSION
+	$(MAKE) deploy VERSION=$$NEW_VERSION; \
+	$(MAKE) tag; \
+	$(MAKE) tag-push; \
+	$(MAKE) release-gh
 
 .PHONY: release-gh
 release-gh:
@@ -115,6 +118,11 @@ tag:
 	fi
 	git tag -a $(TAG) -m "Release $(TAG)"
 	@echo "Created tag $(TAG). Push it with: git push origin $(TAG)"
+
+.PHONY: tag-push
+
+tag-push:
+	git push origin $(TAG)
 
 # --- Version bump helpers (edits VERSION) ---
 define bump_version

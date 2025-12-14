@@ -17,7 +17,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-from fastapi import FastAPI, HTTPException
+from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -314,18 +314,34 @@ class ProcessManager:
     async def _pipe_logs(self, info: ProcessInfo) -> None:
         if not info.process.stdout:
             return
+        buffer = b""
+
+        async def _emit(raw: bytes) -> None:
+            if not raw:
+                return
+            text = raw.decode(errors="ignore").rstrip()
+            logger.info("[%s] %s", info.label, text)
+            info.logs.append(text)
+            info.logs = info.logs[-200:]
+            info.last_event = time.time()
+            await self.broadcaster.broadcast(
+                {"type": "log", "flowId": info.label, "line": text, "ts": info.last_event}
+            )
+
         try:
+            # Read in chunks to avoid asyncio's readline limit on very long log lines
             while True:
-                line = await info.process.stdout.readline()
-                if not line:
+                chunk = await info.process.stdout.read(4096)
+                if not chunk:
+                    if buffer:
+                        await _emit(buffer)
                     break
-                text = line.decode(errors="ignore").rstrip()
-                info.logs.append(text)
-                info.logs = info.logs[-200:]
-                info.last_event = time.time()
-                await self.broadcaster.broadcast(
-                    {"type": "log", "flowId": info.label, "line": text, "ts": info.last_event}
-                )
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    await _emit(line)
+        except Exception as exc:
+            logger.warning("Log streaming for %s stopped: %s", info.label, exc)
         finally:
             info.exit_code = info.process.returncode
             logger.info("Flow %s exited code=%s", info.label, info.exit_code)
@@ -465,6 +481,43 @@ class ProcessManager:
             await asyncio.sleep(0.5)
         return False
 
+    def _patch_generated_helper(self, output_dir: Path) -> None:
+        """
+        Adjust generated OpenAPI helper to use a safer Zod converter at runtime.
+        """
+        try:
+            index_path = output_dir / "src" / "index.ts"
+            if index_path.exists():
+                text = index_path.read_text(encoding="utf-8")
+                text = text.replace(
+                    "import { jsonSchemaToZod } from 'json-schema-to-zod';",
+                    "import { JSONSchemaToZod } from '@dmitryrechkin/json-schema-to-zod';",
+                )
+                text = text.replace(
+                    "const zodSchemaString = jsonSchemaToZod(jsonSchema);\n        const zodSchema = eval(zodSchemaString);",
+                    "const zodSchema = JSONSchemaToZod.convert(jsonSchema);",
+                )
+                index_path.write_text(text, encoding="utf-8")
+            pkg_path = output_dir / "package.json"
+            if pkg_path.exists():
+                pkg = json.loads(pkg_path.read_text(encoding="utf-8"))
+                deps = pkg.get("dependencies") or {}
+                if "@dmitryrechkin/json-schema-to-zod" not in deps:
+                    deps["@dmitryrechkin/json-schema-to-zod"] = "^1.0.1"
+                    pkg["dependencies"] = deps
+                    pkg_path.write_text(json.dumps(pkg, indent=2) + "\n", encoding="utf-8")
+            # Add minimal type shim so tsc can resolve the new module
+            types_path = output_dir / "src" / "json-schema-to-zod.d.ts"
+            if not types_path.exists():
+                types_path.write_text(
+                    "declare module '@dmitryrechkin/json-schema-to-zod' {\n"
+                    "  export const JSONSchemaToZod: { convert: (schema: any) => any };\n"
+                    "}\n",
+                    encoding="utf-8",
+                )
+        except Exception as exc:  # pragma: no cover - best effort patch
+            logger.warning("Failed to patch generated helper: %s", exc)
+
     async def _ensure_openapi_helper(self, flow: Flow) -> str:
         if not flow.openapi_base_url or not flow.openapi_spec_url:
             raise HTTPException(status_code=400, detail="Base URL et spec OpenAPI requises pour une source openapi")
@@ -474,35 +527,106 @@ class ProcessManager:
             if ready:
                 return f"http://127.0.0.1:{existing.port}/mcp"
 
+        # Download spec locally for the generator
+        RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+        spec_path = RUNTIME_DIR / f"{flow.id}-openapi-spec.json"
+        output_dir = RUNTIME_DIR / f"{flow.id}-openapi-helper"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            req = urllib.request.Request(flow.openapi_spec_url, method="GET")
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                spec_path.write_bytes(resp.read())
+        except Exception as exc:
+            raise HTTPException(status_code=400, detail=f"Impossible de télécharger la spec OpenAPI : {exc}") from exc
+
         port = await self._find_free_port()
-        cmd = [
+        generate_cmd = [
             "npx",
             "-y",
-            "@ivotoby/openapi-mcp-server",
-            "--api-base-url",
-            flow.openapi_base_url or "",
-            "--openapi-spec",
-            flow.openapi_spec_url or "",
+            "openapi-mcp-generator",
+            "--input",
+            str(spec_path),
+            "--output",
+            str(output_dir),
             "--transport",
-            "http",
+            "streamable-http",
             "--port",
             str(port),
+            "--force",
+            "--base-url",
+            flow.openapi_base_url
         ]
         try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
+            proc_gen = await asyncio.create_subprocess_exec(
+                *generate_cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.STDOUT,
+                cwd=output_dir,
+                preexec_fn=os.setsid,
+            )
+            await proc_gen.wait()
+            if proc_gen.returncode != 0:
+                raise HTTPException(
+                    status_code=400, detail=f"openapi-mcp-generator a échoué (code {proc_gen.returncode})"
+                )
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=400, detail="binaire introuvable : npx") from exc
+
+        # Patch generated code to avoid eval-based zod generation
+        self._patch_generated_helper(output_dir)
+
+        # Install dependencies (force if required module missing)
+        node_modules = output_dir / "node_modules"
+        required_module = node_modules / "@dmitryrechkin" / "json-schema-to-zod"
+        need_install = not node_modules.exists() or not required_module.exists()
+        if need_install:
+            install_cmd = ["npm", "install"]
+            proc_install = await asyncio.create_subprocess_exec(
+                *install_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=output_dir,
+                preexec_fn=os.setsid,
+            )
+            stdout, stderr = await proc_install.communicate()
+            combined = (stdout or b"") + (stderr or b"")
+            if proc_install.returncode != 0:
+                tail = combined.decode("utf-8", errors="ignore")[-1200:]
+                logger.error("npm install failed code=%s output=%s", proc_install.returncode, tail)
+                raise HTTPException(
+                    status_code=400, detail=f"npm install a échoué (code {proc_install.returncode})"
+                )
+
+        # Build generated server
+        build_cmd = ["npm", "run", "build"]
+        proc_build = await asyncio.create_subprocess_exec(
+            *build_cmd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            cwd=output_dir,
+            preexec_fn=os.setsid,
+        )
+        await proc_build.wait()
+        if proc_build.returncode != 0:
+            raise HTTPException(status_code=400, detail=f"npm run build a échoué (code {proc_build.returncode})")
+
+        start_cmd = ["npm", "run", "start:http", "--", "--port", str(port)]
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *start_cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,
+                cwd=output_dir,
                 preexec_fn=os.setsid,
             )
         except FileNotFoundError as exc:
-            raise HTTPException(status_code=400, detail="binaire introuvable : npx") from exc
+            raise HTTPException(status_code=400, detail="binaire introuvable : npm") from exc
         info = ProcessInfo(
             label=f"openapi-{flow.id}",
             flow_ids=[flow.id],
             process=proc,
             started_at=time.time(),
-            command=cmd,
+            command=start_cmd,
             port=port,
             mode="openapi-helper",
         )
@@ -514,7 +638,7 @@ class ProcessManager:
             raise HTTPException(status_code=400, detail="Le serveur OpenAPI MCP n'a pas démarré à temps")
         # Give the helper time to finish initializing the MCP endpoint
         await asyncio.sleep(2.5)
-        return f"http://127.0.0.1:{port}/mcp"
+        return f"http://0.0.0.0:{port}/mcp"
 
     async def _stop_openapi_helper(self, flow_id: str) -> None:
         info = self.openapi_helpers.get(flow_id)
@@ -587,6 +711,8 @@ class ProcessManager:
                     ready_flow_ids.add(flow.id)
                 else:
                     upstream_url = flow.sse_url or ""
+                    if flow.source_type == EndpointType.OPENAPI:
+                        upstream_url = await self._ensure_openapi_helper(flow)
                     parsed = urlparse(upstream_url)
                     upstream_host = parsed.hostname or ""
                     if upstream_host in {"0.0.0.0", "localhost"}:
@@ -610,7 +736,9 @@ class ProcessManager:
                         logger.info("Upstream endpoint %s ready for OpenAPI flow %s", upstream_url, flow.id)
                         ready_flow_ids.add(flow.id)
                 servers[server_key] = {
-                    "type": "streamable-http" if flow.source_type == EndpointType.STREAMABLE_HTTP else "sse",
+                    "type": "streamable-http"
+                    if flow.source_type in (EndpointType.STREAMABLE_HTTP, EndpointType.OPENAPI)
+                    else "sse",
                     "url": upstream_url,
                     "headers": {h.key: h.value for h in flow.headers} if flow.headers else None,
                 }
@@ -829,16 +957,30 @@ class InspectorManager:
     async def _pipe_logs(self, proc: asyncio.subprocess.Process) -> None:
         if not proc.stdout:
             return
-        while True:
-            line = await proc.stdout.readline()
-            if not line:
-                break
-            text = line.decode(errors="ignore").rstrip()
-            logger.info("[inspector] %s", text)
-            lower = text.lower()
-            if "proxy server listening" in lower or "inspector is up" in lower:
-                self.ready = True
-        logger.info("Inspector process exited code=%s", proc.returncode)
+        buffer = b""
+        try:
+            while True:
+                chunk = await proc.stdout.read(4096)
+                if not chunk:
+                    if buffer:
+                        text = buffer.decode(errors="ignore").rstrip()
+                        logger.info("[inspector] %s", text)
+                        lower = text.lower()
+                        if "proxy server listening" in lower or "inspector is up" in lower:
+                            self.ready = True
+                    break
+                buffer += chunk
+                while b"\n" in buffer:
+                    line, buffer = buffer.split(b"\n", 1)
+                    text = line.decode(errors="ignore").rstrip()
+                    logger.info("[inspector] %s", text)
+                    lower = text.lower()
+                    if "proxy server listening" in lower or "inspector is up" in lower:
+                        self.ready = True
+        except Exception as exc:
+            logger.warning("Inspector log streaming stopped: %s", exc)
+        finally:
+            logger.info("Inspector process exited code=%s", proc.returncode)
 
     def state(self) -> Dict[str, Any]:
         url = self.url if self.ready else None
@@ -908,8 +1050,13 @@ async def list_flows() -> List[FlowResponse]:
 async def create_flow(flow: FlowCreate) -> FlowResponse:
     flow_id = flow.id or str(uuid.uuid4())
     now = time.time()
-    if flow.source_type == EndpointType.OPENAPI and flow.target_type != EndpointType.STREAMABLE_HTTP:
-        raise HTTPException(status_code=400, detail="Une source openapi doit cibler le mode streamable_http")
+    if flow.source_type == EndpointType.OPENAPI and flow.target_type not in (
+        EndpointType.STREAMABLE_HTTP,
+        EndpointType.OPENAPI,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Une source openapi doit cibler le mode streamable_http ou openapi"
+        )
     payload = flow.model_dump(exclude={"id"})
     payload["route"] = payload.get("route") or payload.get("name")
     payload["transport"] = (
@@ -937,8 +1084,13 @@ async def update_flow(flow_id: str, payload: FlowUpdate) -> FlowResponse:
     data = existing.model_dump()
     incoming = payload.model_dump()
     data.update({k: v for k, v in incoming.items() if v is not None})
-    if data.get("source_type") == EndpointType.OPENAPI and data.get("target_type") != EndpointType.STREAMABLE_HTTP:
-        raise HTTPException(status_code=400, detail="Une source openapi doit cibler le mode streamable_http")
+    if data.get("source_type") == EndpointType.OPENAPI and data.get("target_type") not in (
+        EndpointType.STREAMABLE_HTTP,
+        EndpointType.OPENAPI,
+    ):
+        raise HTTPException(
+            status_code=400, detail="Une source openapi doit cibler le mode streamable_http ou openapi"
+        )
 
     if not data.get("route"):
         data["route"] = data.get("name")
@@ -1093,6 +1245,46 @@ async def start_inspector_body(payload: InspectorStart) -> Dict[str, Any]:
 @app.get("/api/inspector/state", response_model=Dict[str, Any])
 async def inspector_state() -> Dict[str, Any]:
     return inspector.state()
+
+@app.post("/api/restart", response_model=Dict[str, str])
+async def restart_server(background_tasks: BackgroundTasks) -> Dict[str, str]:
+    async def _shutdown() -> None:
+        try:
+            # best-effort cleanup
+            for port in list(manager.processes.keys()):
+                await manager._terminate_port(port)
+            for fid in list(manager.openapi_helpers.keys()):
+                await manager._stop_openapi_helper(fid)
+            await inspector.stop()
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Restart cleanup failed: %s", exc)
+        await asyncio.sleep(0.2)
+        starters = [
+            Path("/app/start-all.sh"),
+            Path("/app/start-dev.sh"),
+            BASE_DIR / "start-all.sh",
+            BASE_DIR / "start-dev.sh",
+            BASE_DIR / "studio" / "start-all.sh",
+            BASE_DIR / "studio" / "start-dev.sh",
+        ]
+        for starter in starters:
+            if starter.exists():
+                try:
+                    os.execv(str(starter), [str(starter)])
+                except Exception as exc:  # pragma: no cover
+                    logger.warning("Exec restart via %s failed: %s", starter, exc)
+        try:
+            os.execv(sys.argv[0], sys.argv)
+        except Exception as exc:  # pragma: no cover
+            logger.warning("Exec restart via argv failed: %s", exc)
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception as inner:  # pragma: no cover
+                logger.error("Exec restart via python failed: %s", inner)
+                os._exit(0)
+
+    background_tasks.add_task(_shutdown)
+    return {"status": "restarting"}
 
 
 @app.get("/api/status", response_model=Dict[str, Any])
